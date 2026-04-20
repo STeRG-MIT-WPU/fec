@@ -1,114 +1,153 @@
-# fec_sterg — libcorrect port for STM32
+# fec_sterg — STeRG S1.0 UHF FEC for STM32
 
-Forward-Error-Correction library for STM32 microcontrollers, ported from
-[quiet/libcorrect](https://github.com/quiet/libcorrect).
+Forward-Error-Correction library implementing the two UHF coding chains
+mandated by the **STeRG S1.0 FEC Final Decision** (FEC-FINAL-002). Ported
+from [quiet/libcorrect](https://github.com/quiet/libcorrect) and stripped
+of desktop/SSE dependencies so it compiles clean with `arm-none-eabi-gcc`.
 
-Provides two codecs:
+## What's in the box
 
-- **Reed-Solomon** — systematic RS(255, 255-2t), recovers up to `t` byte errors.
-- **Convolutional + Viterbi** — rate 1/2 or 1/3 with configurable order and
-  polynomials. Supports hard and soft (8-bit) decoding.
+| Link | Chain | Standard | Code rate |
+|---|---|---|---|
+| **UHF HK** (VCID 0) | RS(255,223) + Conv 1/2 K=7 | CCSDS 131.0-B-5 | 0.437 |
+| **UHF Beacon** (VCID 7) | RS(255,223) shortened (5 modes) | CCSDS 131.0-B-5 §4 | ≈0.75 |
 
-## What changed vs. upstream
+S-band LDPC 1/2 lives on the Zynq-7000 and is **not** part of this
+library.
 
-| Change | Why |
+## High-level API — `sterg_fec.h`
+
+```c
+#include "sterg_fec.h"
+
+/* ---- UHF HK: 223 B in → 4096 bits out ---- */
+sterg_uhf_hk_t *hk = sterg_uhf_hk_create();
+
+uint8_t msg[STERG_HK_MSG_LEN];        // 223 B
+uint8_t enc[STERG_HK_ENCODED_MAX_LEN]; // 512 B
+uint8_t dec[STERG_HK_MSG_LEN];
+
+size_t bits = sterg_uhf_hk_encode(hk, msg, enc);     // always 4096
+int rc = sterg_uhf_hk_decode(hk, enc, bits, dec);    // 0 == ok
+
+sterg_uhf_hk_destroy(hk);
+
+/* ---- UHF Beacon: 5 modes, 89..99 B in → +32 B parity ---- */
+sterg_uhf_beacon_t *bcn = sterg_uhf_beacon_create();
+
+uint8_t beacon[STERG_BEACON_MAX_PAYLOAD];
+uint8_t enc[STERG_BEACON_MAX_ENCODED];
+
+size_t n = sterg_uhf_beacon_encode(bcn,
+            STERG_BEACON_MODE_NOMINAL, beacon, enc); // 99+32 = 131 B
+
+uint8_t out[STERG_BEACON_MAX_PAYLOAD];
+ssize_t got = sterg_uhf_beacon_decode(bcn,
+            STERG_BEACON_MODE_NOMINAL, enc, out);    // 99 on success
+
+sterg_uhf_beacon_destroy(bcn);
+```
+
+### Beacon modes (from FEC-FINAL §5.5)
+
+| Mode | Name | Payload | RS code | On-air |
+|---|---|---|---|---|
+| 0 | Nominal    | 99 B | RS(131,99) | 131 B |
+| 1 | Pre-link   | 96 B | RS(128,96) | 128 B |
+| 2 | Detumbling | 89 B | RS(121,89) | 121 B |
+| 3 | Low power  | 95 B | RS(127,95) | 131 B |
+| 4 | Critical   | 89 B | RS(121,89) | 121 B |
+
+All modes use the same GF(256) encoder with 32 parity bytes — every
+mode still corrects up to 16 byte errors.
+
+## CCSDS parameters used internally
+
+| Parameter | Value |
 |---|---|
-| `<unistd.h>` removed; `ssize_t` always `ptrdiff_t` | arm-none-eabi newlib-nano lacks `unistd.h` |
-| All `<stdio.h>` / `printf` debug code stripped | No semihosting required; saves flash |
-| `<time.h>`, `<assert.h>` dropped from headers | Not needed on bare metal |
-| All SSE-specific sources excluded | No SIMD on Cortex-M |
-| `popcount` portable fallback fixed (paren bug) | Original macro had operator-precedence bug |
-| `popcount` enabled for `__clang__` too | For ARMClang v6 toolchains |
-| Small NULL-check hardening on `malloc` callers | Fail gracefully on exhausted heap |
+| RS primitive polynomial | `0x187` = `x^8 + x^7 + x^2 + x + 1` |
+| RS first consecutive root | 112 |
+| RS generator root gap | 11 |
+| RS parity bytes (2t) | 32 |
+| Conv constraint length K | 7 |
+| Conv rate | 1/2 |
+| Conv polynomials (libcorrect bit order) | `{0155, 0117}` |
+| Conv polynomials (CCSDS doc notation) | `G1 = 0171, G2 = 0133` |
 
-The public API in `correct.h` is **unchanged** — code that already uses
-libcorrect will link against fec_sterg without modification.
+> **CCSDS G2 inversion:** The CCSDS 131.0-B-5 spec mandates inverting
+> the G2 output to prevent all-zero-in → all-zero-out. libcorrect does
+> not do this automatically. For bit-exact interop with a CCSDS ground
+> station, XOR every second output bit with 1 after encoding (and undo
+> on receive). In-library round-trip encode/decode works either way.
+
+## Low-level API (still available)
+
+`correct.h` preserves the full libcorrect API if you need a
+non-standard code. A new polynomial constant has been added:
+
+```c
+static const correct_convolutional_polynomial_t
+    correct_conv_ccsds_r12_7_polynomial[] = {0155, 0117};
+```
 
 ## Folder layout
 
 ```
 fec_sterg/
-├── Inc/                        # add this to your compiler include path
-│   ├── correct.h               # public API
-│   └── correct/
-│       ├── portable.h
-│       ├── convolutional.h
-│       ├── reed-solomon.h
-│       ├── convolutional/…     # internal headers
-│       └── reed-solomon/…
+├── Inc/
+│   ├── correct.h                   # libcorrect public API + CCSDS conv poly
+│   ├── sterg_fec.h                 # STeRG high-level API (HK + Beacon)
+│   └── correct/                    # internal libcorrect headers
 ├── Src/
-│   ├── convolutional/          # 7 .c files
-│   └── reed-solomon/           # 4 .c files
-└── example/
-    └── fec_example.c           # quick sanity demo
+│   ├── convolutional/              # Viterbi + convolutional encoder
+│   ├── reed-solomon/               # RS(255,223) codec
+│   └── sterg/sterg_fec.c           # HK and Beacon chains
+├── example/fec_example.c           # callable demo
+├── test/                           # verification harness (14 tests)
+├── docker/                         # reproducible build env
+└── docs/ … FEC_FINAL_DECISION.pdf  # source-of-truth spec (in repo root)
 ```
 
-## Integration into STM32CubeIDE
+## STM32CubeIDE integration
 
-1. Copy the `fec_sterg/` folder into your project (next to `Core/`).
-2. Right-click the project → *Properties* → *C/C++ General* → *Paths and Symbols*:
-   - **Includes**: add `../fec_sterg/Inc`
-   - **Source Location**: add `/<project>/fec_sterg/Src`
-3. Edit the linker script (`STM32xxxx_FLASH.ld`) and bump the heap:
+1. Drop `fec_sterg/` into your project.
+2. **Includes**: add `../fec_sterg/Inc`.
+3. **Source Location**: add `/<project>/fec_sterg/Src` (all three subdirs
+   are picked up automatically).
+4. Bump the linker heap:
    ```
-   _Min_Heap_Size  = 0x8000;   /* 32 KB — required for the decoder */
+   _Min_Heap_Size  = 0x8000;   /* 32 KB — decoder needs ~25 KB */
    _Min_Stack_Size = 0x1000;
    ```
-4. In `main.c`:
+5. From `main()`:
    ```c
-   #include "correct.h"
-
-   int fec_sterg_example_run(void); /* from example/fec_example.c */
-
-   int main(void) {
-       HAL_Init();
-       SystemClock_Config();
-       MX_GPIO_Init();
-
-       if (fec_sterg_example_run() == 0) {
-           HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
-       }
-       while (1) { }
-   }
+   #include "sterg_fec.h"
+   int fec_sterg_example_run(void);   /* from example/fec_example.c */
    ```
-
-## Integration via Makefile (arm-none-eabi-gcc)
-
-```make
-CFLAGS  += -Ifec_sterg/Inc
-SOURCES += $(wildcard fec_sterg/Src/convolutional/*.c) \
-           $(wildcard fec_sterg/Src/reed-solomon/*.c)
-```
 
 ## Memory footprint
 
-Heap usage (worst case, allocated on first decode call and reused):
+Heap (allocated lazily on first decode, then reused):
 
-| Codec | Config | Approx. heap |
-|---|---|---|
-| Convolutional decoder | rate=2, order=7 | ~10 KB |
-| Convolutional decoder | rate=2, order=9 | ~40 KB |
-| Reed-Solomon decoder  | num_roots=32    | ~18 KB |
+| Chain | Heap usage |
+|---|---|
+| UHF HK (RS + Conv decoder)  | ~28 KB |
+| UHF Beacon (RS only)        | ~18 KB |
 
-Flash/code size is around **10–15 KB** for both codecs combined on Cortex-M4
-with `-Os`.
+Flash: ~12-15 KB `.text` for both chains combined on Cortex-M4 at `-Os`.
 
-**Minimum target:** an STM32 with ≥ 32 KB SRAM (F103C8, F401RE, F411RE,
-F446RE, G474, H7, etc.). F030/F072 class parts (< 20 KB SRAM) will not
-fit the default decoder allocations — use RS only with smaller
-`num_roots`, or replace `malloc` with a static-pool allocator.
+## Docker verification
 
-## Thread / interrupt safety
+See `docker/README.md`. Short version:
 
-No static mutable state is touched on the encode/decode paths after
-`correct_*_create()` returns. Separate instances can run concurrently
-on different RTOS tasks. A single instance is **not** safe to share
-across tasks without external locking.
+```powershell
+docker build -t fec_sterg_verify -f fec_sterg/docker/Dockerfile fec_sterg/docker
+docker run --rm -v ${PWD}:/work fec_sterg_verify
+```
 
-Do **not** call encode/decode from an ISR — the decoder may execute
-tens of thousands of instructions.
+Runs 14 functional tests on the host plus an `arm-none-eabi-gcc`
+Cortex-M4 cross-compile.
 
 ## License
 
-BSD-3-Clause (same as upstream libcorrect). See the original repo for
-the full text.
+BSD-3-Clause (same as upstream libcorrect).

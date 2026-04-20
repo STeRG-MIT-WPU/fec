@@ -1,18 +1,14 @@
 /*
- * fec_sterg verification harness.
+ * STeRG S1.0 FEC verification harness (see FEC_FINAL_DECISION.pdf).
  *
- * Runs on the host (inside the Docker container) to confirm the ported
- * codecs produce correct output. Each test prints a PASS/FAIL line.
+ * Tested configurations:
  *
- * Tests:
- *   1. Reed-Solomon round-trip, zero errors, num_roots in {8, 16, 32}.
- *   2. Reed-Solomon correction at exactly num_roots/2 byte errors.
- *   3. Reed-Solomon fails cleanly beyond num_roots/2 errors.
- *   4. Reed-Solomon decode_with_erasures recovers erasures.
- *   5. Convolutional rate-1/2 order-7 round-trip with bit flips.
- *   6. Convolutional rate-1/3 order-7 round-trip.
- *   7. Convolutional soft decoding.
- *   8. Convolutional order-9 round-trip.
+ *   UHF HK     RS(255,223) + Conv 1/2 K=7    CCSDS 131.0-B-5
+ *   UHF Beacon RS(255,223) shortened, 5 modes  CCSDS 131.0-B-5 §4
+ *
+ * Also spot-checks the low-level correct_* API with CCSDS RS parameters
+ * (primitive 0x187, first root 112, root gap 11) to catch regressions
+ * that don't show up through the sterg_fec wrappers.
  */
 #include <stdio.h>
 #include <string.h>
@@ -20,19 +16,18 @@
 #include <stdlib.h>
 
 #include "correct.h"
+#include "sterg_fec.h"
 
 static int tests_run = 0;
 static int tests_failed = 0;
 
 #define TEST(name) do { \
     tests_run++; \
-    printf("[%02d] %-55s ", tests_run, name); \
+    printf("[%02d] %-60s ", tests_run, name); \
     fflush(stdout); \
 } while (0)
 
-#define PASS() do { \
-    printf("PASS\n"); \
-} while (0)
+#define PASS() do { printf("PASS\n"); } while (0)
 
 #define FAIL(fmt, ...) do { \
     tests_failed++; \
@@ -45,218 +40,184 @@ static void fill_pattern(uint8_t *buf, size_t n, unsigned int seed) {
     }
 }
 
-/* --- Reed-Solomon tests --- */
+/* ===================================================================
+ * Low-level CCSDS RS(255,223) sanity checks
+ * =================================================================== */
 
-static void rs_roundtrip_clean(size_t num_roots) {
-    char name[64];
-    snprintf(name, sizeof(name), "RS(255,%zu) clean round-trip", 255 - num_roots);
-    TEST(name);
-
-    size_t msg_len = 255 - num_roots;
-    uint8_t msg[255], enc[255], dec[255];
-    fill_pattern(msg, msg_len, 42);
+static void ccsds_rs_clean_roundtrip(void) {
+    TEST("CCSDS RS(255,223) clean round-trip");
+    uint8_t msg[223], enc[255], dec[223];
+    fill_pattern(msg, 223, 1);
 
     correct_reed_solomon *rs = correct_reed_solomon_create(
-        correct_rs_primitive_polynomial_ccsds, 1, 1, num_roots);
+        correct_rs_primitive_polynomial_ccsds, 112, 11, 32);
     if (!rs) { FAIL("create"); return; }
 
-    ssize_t elen = correct_reed_solomon_encode(rs, msg, msg_len, enc);
-    if (elen != 255) { FAIL("encode returned %zd", elen); goto out; }
-
-    ssize_t dlen = correct_reed_solomon_decode(rs, enc, 255, dec);
-    if (dlen != (ssize_t)msg_len) { FAIL("decode returned %zd", dlen); goto out; }
-    if (memcmp(msg, dec, msg_len) != 0) { FAIL("payload mismatch"); goto out; }
-
-    PASS();
-out:
+    correct_reed_solomon_encode(rs, msg, 223, enc);
+    ssize_t n = correct_reed_solomon_decode(rs, enc, 255, dec);
     correct_reed_solomon_destroy(rs);
+
+    if (n != 223 || memcmp(msg, dec, 223)) { FAIL("mismatch (n=%zd)", n); return; }
+    PASS();
 }
 
-static void rs_recover_at_limit(size_t num_roots) {
-    char name[64];
-    snprintf(name, sizeof(name), "RS(255,%zu) recovers %zu byte errors",
-             255 - num_roots, num_roots / 2);
-    TEST(name);
-
-    size_t msg_len = 255 - num_roots;
-    uint8_t msg[255], enc[255], dec[255];
-    fill_pattern(msg, msg_len, 99);
+static void ccsds_rs_corrects_16(void) {
+    TEST("CCSDS RS(255,223) corrects 16 byte errors");
+    uint8_t msg[223], enc[255], dec[223];
+    fill_pattern(msg, 223, 2);
 
     correct_reed_solomon *rs = correct_reed_solomon_create(
-        correct_rs_primitive_polynomial_ccsds, 1, 1, num_roots);
+        correct_rs_primitive_polynomial_ccsds, 112, 11, 32);
     if (!rs) { FAIL("create"); return; }
 
-    correct_reed_solomon_encode(rs, msg, msg_len, enc);
+    correct_reed_solomon_encode(rs, msg, 223, enc);
+    for (int i = 0; i < 16; i++) enc[i * 15] ^= 0x5A;
 
-    /* Flip num_roots/2 bytes at pseudo-random spread positions */
-    size_t flips = num_roots / 2;
-    for (size_t i = 0; i < flips; i++) {
-        size_t idx = (i * 251u) % 255;
-        enc[idx] ^= 0x5A;
-    }
-
-    ssize_t dlen = correct_reed_solomon_decode(rs, enc, 255, dec);
-    if (dlen != (ssize_t)msg_len) { FAIL("decode returned %zd", dlen); goto out; }
-    if (memcmp(msg, dec, msg_len) != 0) { FAIL("mismatch after correction"); goto out; }
-
-    PASS();
-out:
+    ssize_t n = correct_reed_solomon_decode(rs, enc, 255, dec);
     correct_reed_solomon_destroy(rs);
+
+    if (n != 223 || memcmp(msg, dec, 223)) { FAIL("mismatch (n=%zd)", n); return; }
+    PASS();
 }
 
-static void rs_fail_beyond_limit(void) {
-    TEST("RS(255,223) returns -1 with too many errors");
+/* ===================================================================
+ * UHF HK — RS + Conv chain
+ * =================================================================== */
 
-    size_t num_roots = 32;
-    size_t msg_len = 255 - num_roots;
-    uint8_t msg[255], enc[255], dec[255];
-    fill_pattern(msg, msg_len, 7);
+static void hk_clean(void) {
+    TEST("UHF HK clean round-trip (223 B -> 4096 bits -> 223 B)");
+    uint8_t msg[STERG_HK_MSG_LEN];
+    uint8_t enc[STERG_HK_ENCODED_MAX_LEN];
+    uint8_t dec[STERG_HK_MSG_LEN];
+    fill_pattern(msg, STERG_HK_MSG_LEN, 3);
 
-    correct_reed_solomon *rs = correct_reed_solomon_create(
-        correct_rs_primitive_polynomial_ccsds, 1, 1, num_roots);
-    if (!rs) { FAIL("create"); return; }
+    sterg_uhf_hk_t *hk = sterg_uhf_hk_create();
+    if (!hk) { FAIL("create"); return; }
 
-    correct_reed_solomon_encode(rs, msg, msg_len, enc);
+    size_t bits = sterg_uhf_hk_encode(hk, msg, enc);
+    if (bits != 4096) { FAIL("encode returned %zu bits", bits); goto out; }
 
-    /* 25 errors — beyond num_roots/2 = 16 */
-    for (size_t i = 0; i < 25; i++) {
-        enc[i * 10] ^= 0xFF;
-    }
-
-    ssize_t dlen = correct_reed_solomon_decode(rs, enc, 255, dec);
-    /* Either returns -1 or returns a bad payload. Both are acceptable "can't recover". */
-    if (dlen == (ssize_t)msg_len && memcmp(msg, dec, msg_len) == 0) {
-        FAIL("unexpectedly recovered 25 errors (should exceed capacity)");
-        goto out;
-    }
+    if (sterg_uhf_hk_decode(hk, enc, bits, dec) != 0) { FAIL("decode"); goto out; }
+    if (memcmp(msg, dec, STERG_HK_MSG_LEN)) { FAIL("payload mismatch"); goto out; }
     PASS();
 out:
-    correct_reed_solomon_destroy(rs);
+    sterg_uhf_hk_destroy(hk);
 }
 
-static void rs_erasures(void) {
-    TEST("RS(255,223) decode_with_erasures recovers 32 erasures");
-
-    size_t num_roots = 32;
-    size_t msg_len = 255 - num_roots;
-    uint8_t msg[255], enc[255], dec[255];
-    uint8_t erasure_locs[32];
-    fill_pattern(msg, msg_len, 13);
-
-    correct_reed_solomon *rs = correct_reed_solomon_create(
-        correct_rs_primitive_polynomial_ccsds, 1, 1, num_roots);
-    if (!rs) { FAIL("create"); return; }
-
-    correct_reed_solomon_encode(rs, msg, msg_len, enc);
-
-    /* Wipe 32 bytes and inform the decoder of their positions */
-    for (size_t i = 0; i < 32; i++) {
-        size_t idx = i * 7;
-        enc[idx] = 0x00;
-        erasure_locs[i] = (uint8_t)idx;
-    }
-
-    ssize_t dlen = correct_reed_solomon_decode_with_erasures(
-        rs, enc, 255, erasure_locs, 32, dec);
-    if (dlen != (ssize_t)msg_len) { FAIL("decode returned %zd", dlen); goto out; }
-    if (memcmp(msg, dec, msg_len) != 0) { FAIL("mismatch after erasure recovery"); goto out; }
-
-    PASS();
-out:
-    correct_reed_solomon_destroy(rs);
-}
-
-/* --- Convolutional tests --- */
-
-static void conv_roundtrip(size_t rate, size_t order,
-                           const correct_convolutional_polynomial_t *poly,
-                           const char *label) {
+static void hk_with_bit_flips(int num_flips, const char *label) {
     char name[96];
-    snprintf(name, sizeof(name), "Conv %s round-trip + 3 bit flips", label);
+    snprintf(name, sizeof(name), "UHF HK recovers %d scattered bit flips (%s)",
+             num_flips, label);
     TEST(name);
 
-    const size_t msg_len = 64;
-    uint8_t msg[64];
-    uint8_t enc[1024];
-    uint8_t dec[128];
-    fill_pattern(msg, msg_len, 201);
+    uint8_t msg[STERG_HK_MSG_LEN];
+    uint8_t enc[STERG_HK_ENCODED_MAX_LEN];
+    uint8_t dec[STERG_HK_MSG_LEN];
+    fill_pattern(msg, STERG_HK_MSG_LEN, 5);
 
-    correct_convolutional *c = correct_convolutional_create(rate, order, poly);
-    if (!c) { FAIL("create"); return; }
+    sterg_uhf_hk_t *hk = sterg_uhf_hk_create();
+    if (!hk) { FAIL("create"); return; }
 
-    size_t enc_bits = correct_convolutional_encode(c, msg, msg_len, enc);
-    if (enc_bits == 0) { FAIL("encode returned 0"); goto out; }
+    size_t bits = sterg_uhf_hk_encode(hk, msg, enc);
+    if (bits == 0) { FAIL("encode"); goto out; }
+    size_t bytes = bits / 8;
 
-    /* Flip three bits sparsely */
-    enc[5]  ^= 0x04;
-    enc[20] ^= 0x10;
-    enc[40] ^= 0x01;
-
-    ssize_t dbytes = correct_convolutional_decode(c, enc, enc_bits, dec);
-    if (dbytes < (ssize_t)msg_len) { FAIL("decode returned %zd", dbytes); goto out; }
-    if (memcmp(msg, dec, msg_len) != 0) { FAIL("payload mismatch"); goto out; }
-
-    PASS();
-out:
-    correct_convolutional_destroy(c);
-}
-
-static void conv_soft(void) {
-    TEST("Conv r=1/2 o=7 soft decoding (AWGN-ish)");
-
-    const size_t msg_len = 48;
-    uint8_t msg[64];
-    uint8_t enc[512];
-    uint8_t soft[4096];
-    uint8_t dec[128];
-    fill_pattern(msg, msg_len, 77);
-
-    correct_convolutional *c = correct_convolutional_create(
-        2, 7, correct_conv_r12_7_polynomial);
-    if (!c) { FAIL("create"); return; }
-
-    size_t enc_bits = correct_convolutional_encode(c, msg, msg_len, enc);
-
-    /* Map hard bits -> soft symbols: 1 -> 240, 0 -> 15 (near-saturated, small noise) */
-    for (size_t b = 0; b < enc_bits; b++) {
-        uint8_t bit = (enc[b / 8] >> (7 - (b % 8))) & 1;
-        soft[b] = bit ? 240 : 15;
+    /* Sprinkle single-bit flips across the encoded stream */
+    for (int i = 0; i < num_flips; i++) {
+        size_t byte_idx = (i * 211u + 17u) % bytes;
+        uint8_t bit = (uint8_t)(1u << ((i * 3u + 1u) & 7u));
+        enc[byte_idx] ^= bit;
     }
-    /* Nudge a few symbols into the ambiguous zone */
-    soft[10] = 130;
-    soft[50] = 125;
-    soft[90] = 128;
 
-    ssize_t dbytes = correct_convolutional_decode_soft(c, soft, enc_bits, dec);
-    if (dbytes < (ssize_t)msg_len) { FAIL("decode returned %zd", dbytes); goto out; }
-    if (memcmp(msg, dec, msg_len) != 0) { FAIL("soft decode mismatch"); goto out; }
-
+    if (sterg_uhf_hk_decode(hk, enc, bits, dec) != 0) {
+        FAIL("decode"); goto out;
+    }
+    if (memcmp(msg, dec, STERG_HK_MSG_LEN)) { FAIL("payload mismatch"); goto out; }
     PASS();
 out:
-    correct_convolutional_destroy(c);
+    sterg_uhf_hk_destroy(hk);
 }
 
-/* --- Entry point --- */
+/* ===================================================================
+ * UHF Beacon — shortened RS, all 5 modes
+ * =================================================================== */
+
+static const char *beacon_mode_name(sterg_beacon_mode_t m) {
+    switch (m) {
+        case STERG_BEACON_MODE_NOMINAL:    return "Nominal";
+        case STERG_BEACON_MODE_PRELINK:    return "Pre-link";
+        case STERG_BEACON_MODE_DETUMBLING: return "Detumbling";
+        case STERG_BEACON_MODE_LOWPOWER:   return "Low power";
+        case STERG_BEACON_MODE_CRITICAL:   return "Critical";
+    }
+    return "?";
+}
+
+static void beacon_mode(sterg_beacon_mode_t mode, int flips) {
+    char name[96];
+    size_t payload_len = sterg_beacon_payload_len(mode);
+    snprintf(name, sizeof(name),
+             "UHF Beacon %s (mode %d, %zu B) corrects %d byte errors",
+             beacon_mode_name(mode), (int)mode, payload_len, flips);
+    TEST(name);
+
+    sterg_uhf_beacon_t *bcn = sterg_uhf_beacon_create();
+    if (!bcn) { FAIL("create"); return; }
+
+    uint8_t payload[STERG_BEACON_MAX_PAYLOAD];
+    uint8_t enc[STERG_BEACON_MAX_ENCODED];
+    uint8_t dec[STERG_BEACON_MAX_PAYLOAD];
+    fill_pattern(payload, payload_len, 31 + (unsigned)mode);
+
+    size_t enc_len = sterg_uhf_beacon_encode(bcn, mode, payload, enc);
+    if (enc_len != payload_len + 32) { FAIL("encode len %zu", enc_len); goto out; }
+
+    for (int i = 0; i < flips; i++) {
+        enc[(i * 7u) % enc_len] ^= 0xA5;
+    }
+
+    ssize_t n = sterg_uhf_beacon_decode(bcn, mode, enc, dec);
+    if (n != (ssize_t)payload_len) { FAIL("decode n=%zd", n); goto out; }
+    if (memcmp(payload, dec, payload_len)) { FAIL("payload mismatch"); goto out; }
+    PASS();
+out:
+    sterg_uhf_beacon_destroy(bcn);
+}
+
+static void beacon_invalid_mode(void) {
+    TEST("UHF Beacon rejects invalid mode");
+    sterg_uhf_beacon_t *bcn = sterg_uhf_beacon_create();
+    if (!bcn) { FAIL("create"); return; }
+
+    if (sterg_beacon_payload_len((sterg_beacon_mode_t)99) != 0) {
+        FAIL("payload_len accepted bogus mode");
+    } else {
+        PASS();
+    }
+    sterg_uhf_beacon_destroy(bcn);
+}
+
+/* ===================================================================
+ * Main
+ * =================================================================== */
 
 int main(void) {
-    printf("fec_sterg verification harness\n");
-    printf("==============================\n");
+    printf("STeRG S1.0 FEC verification harness\n");
+    printf("===================================\n");
 
-    rs_roundtrip_clean(8);
-    rs_roundtrip_clean(16);
-    rs_roundtrip_clean(32);
+    ccsds_rs_clean_roundtrip();
+    ccsds_rs_corrects_16();
 
-    rs_recover_at_limit(8);
-    rs_recover_at_limit(16);
-    rs_recover_at_limit(32);
+    hk_clean();
+    hk_with_bit_flips(5,  "below Viterbi capacity");
+    hk_with_bit_flips(20, "moderate burst");
 
-    rs_fail_beyond_limit();
-    rs_erasures();
-
-    conv_roundtrip(2, 7, correct_conv_r12_7_polynomial, "r=1/2 o=7");
-    conv_roundtrip(3, 7, correct_conv_r13_7_polynomial, "r=1/3 o=7");
-    conv_roundtrip(2, 9, correct_conv_r12_9_polynomial, "r=1/2 o=9");
-    conv_soft();
+    beacon_mode(STERG_BEACON_MODE_NOMINAL,    8);
+    beacon_mode(STERG_BEACON_MODE_PRELINK,    8);
+    beacon_mode(STERG_BEACON_MODE_DETUMBLING, 8);
+    beacon_mode(STERG_BEACON_MODE_LOWPOWER,   8);
+    beacon_mode(STERG_BEACON_MODE_CRITICAL,  16); /* at the 16-byte RS limit */
+    beacon_invalid_mode();
 
     printf("\n%d/%d tests passed\n", tests_run - tests_failed, tests_run);
     return tests_failed ? 1 : 0;

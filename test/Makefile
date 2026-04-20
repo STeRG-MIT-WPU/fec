@@ -10,7 +10,7 @@
 
 ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 INC      := $(ROOT)/Inc
-SRC_DIRS := $(ROOT)/Src/convolutional $(ROOT)/Src/reed-solomon
+SRC_DIRS := $(ROOT)/Src/convolutional $(ROOT)/Src/reed-solomon $(ROOT)/Src/sterg
 SRCS     := $(foreach d,$(SRC_DIRS),$(wildcard $(d)/*.c))
 BUILD    := build
 
@@ -56,6 +56,10 @@ $(BUILD)/host/reed-solomon__%.o: $(ROOT)/Src/reed-solomon/%.c
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) -c $< -o $@
 
+$(BUILD)/host/sterg__%.o: $(ROOT)/Src/sterg/%.c
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) -c $< -o $@
+
 # -------- arm cross-compile --------
 arm-build: $(ARM_OBJS)
 	@echo "==> Cross-compile OK: $(words $(ARM_OBJS)) Cortex-M4 objects built"
@@ -66,6 +70,10 @@ $(BUILD)/arm/convolutional__%.o: $(ROOT)/Src/convolutional/%.c
 	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
 
 $(BUILD)/arm/reed-solomon__%.o: $(ROOT)/Src/reed-solomon/%.c
+	@mkdir -p $(dir $@)
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+
+$(BUILD)/arm/sterg__%.o: $(ROOT)/Src/sterg/%.c
 	@mkdir -p $(dir $@)
 	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
 

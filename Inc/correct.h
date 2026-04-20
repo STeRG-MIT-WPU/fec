@@ -35,6 +35,26 @@ static const correct_convolutional_polynomial_t correct_conv_r13_8_polynomial[] 
 static const correct_convolutional_polynomial_t correct_conv_r13_9_polynomial[] = {0417, 0627,
                                                                                    0675};
 
+/* CCSDS 131.0-B-5 convolutional code — K=7, rate 1/2.
+ *
+ * The CCSDS standard specifies (using its own bit-ordering):
+ *   G1 = 171 octal   (1 + x + x^2 + x^3 + x^6)
+ *   G2 = 133 octal   (1 + x^2 + x^3 + x^5 + x^6)
+ *
+ * libcorrect represents polynomials with bit k = tap at delay D^k (LSB-first),
+ * which is the bit-reverse of CCSDS's MSB-first convention. The values below
+ * are the CCSDS polynomials in libcorrect's bit order — identical to Phil
+ * Karn's libfec V27POLYA/V27POLYB used by essentially every ground-station
+ * CCSDS decoder.
+ *
+ * NOTE: CCSDS also specifies that the G2 output be inverted (1's-complement)
+ * to avoid all-zero output on all-zero input. libcorrect does not invert
+ * automatically; for strict CCSDS interop, XOR every second output bit with 1
+ * after encoding, and do the reverse on the demodulated stream before
+ * decoding. For in-library round-trip use, the inversion is unnecessary.
+ */
+static const correct_convolutional_polynomial_t correct_conv_ccsds_r12_7_polynomial[] = {0155, 0117};
+
 typedef uint8_t correct_convolutional_soft_t;
 
 struct correct_convolutional;

@@ -1,86 +1,101 @@
 /*
- * fec_sterg example for STM32.
+ * STeRG S1.0 FEC example for STM32.
  *
- * Demonstrates both Reed-Solomon and convolutional (Viterbi) codec usage.
- * Call fec_sterg_example_run() from main() after HAL init. The result
- * is returned as a bitfield; on an STM32 Nucleo you can light the LED
- * if it returns 0.
+ * Demonstrates the two UHF chains defined in FEC-FINAL-002:
  *
- * Requires ~32 KB heap (_Min_Heap_Size in linker script).
+ *   UHF HK   (VCID 0) : RS(255,223) + Conv 1/2 K=7   (CCSDS 131.0-B-5)
+ *   UHF Beacon (VCID 7): RS(255,223) shortened       (CCSDS 131.0-B-5 §4)
+ *
+ * The function returns 0 on success. Wire it up in main() to blink an LED
+ * after HAL init. The decoders need ~20-25 KB of heap — bump
+ * _Min_Heap_Size in the linker script to 0x8000.
  */
 #include <string.h>
 #include <stdint.h>
 
-#include "correct.h"
+#include "sterg_fec.h"
 
-#define RS_EXAMPLE_MSG_LEN   223
-#define RS_EXAMPLE_PARITY    32   /* block = 255 */
+/* ---------- UHF HK ---------- */
 
-#define CONV_EXAMPLE_MSG_LEN 32
+static int hk_example(void) {
+    uint8_t msg[STERG_HK_MSG_LEN];
+    uint8_t encoded[STERG_HK_ENCODED_MAX_LEN];
+    uint8_t decoded[STERG_HK_MSG_LEN];
 
-static int rs_example(void) {
-    uint8_t msg[RS_EXAMPLE_MSG_LEN];
-    uint8_t encoded[RS_EXAMPLE_MSG_LEN + RS_EXAMPLE_PARITY];
-    uint8_t decoded[RS_EXAMPLE_MSG_LEN];
-
-    for (size_t i = 0; i < RS_EXAMPLE_MSG_LEN; i++) {
+    for (size_t i = 0; i < STERG_HK_MSG_LEN; i++) {
         msg[i] = (uint8_t)(i * 37u + 11u);
     }
 
-    correct_reed_solomon *rs = correct_reed_solomon_create(
-        correct_rs_primitive_polynomial_ccsds, 1, 1, RS_EXAMPLE_PARITY);
-    if (!rs) return 1;
+    sterg_uhf_hk_t *hk = sterg_uhf_hk_create();
+    if (!hk) return 1;
 
-    ssize_t enc_len = correct_reed_solomon_encode(rs, msg, RS_EXAMPLE_MSG_LEN, encoded);
-    if (enc_len < 0) {
-        correct_reed_solomon_destroy(rs);
-        return 2;
+    size_t bits = sterg_uhf_hk_encode(hk, msg, encoded);
+    if (bits == 0) { sterg_uhf_hk_destroy(hk); return 2; }
+
+    /* Simulated channel noise — Viterbi should scrub a few bit-flips out */
+    encoded[12] ^= 0x10;
+    encoded[77] ^= 0x02;
+    encoded[200] ^= 0x40;
+
+    if (sterg_uhf_hk_decode(hk, encoded, bits, decoded) != 0) {
+        sterg_uhf_hk_destroy(hk); return 3;
+    }
+    if (memcmp(msg, decoded, STERG_HK_MSG_LEN) != 0) {
+        sterg_uhf_hk_destroy(hk); return 4;
     }
 
-    /* Simulate errors: flip 16 bytes (up to num_roots/2 is recoverable) */
-    for (int i = 0; i < 16; i++) {
-        encoded[i * 7] ^= 0xA5;
-    }
-
-    ssize_t dec_len = correct_reed_solomon_decode(rs, encoded, enc_len, decoded);
-    correct_reed_solomon_destroy(rs);
-
-    if (dec_len != RS_EXAMPLE_MSG_LEN) return 3;
-    if (memcmp(msg, decoded, RS_EXAMPLE_MSG_LEN) != 0) return 4;
-
+    sterg_uhf_hk_destroy(hk);
     return 0;
 }
 
-static int conv_example(void) {
-    uint8_t msg[CONV_EXAMPLE_MSG_LEN];
-    uint8_t encoded[128];   /* plenty of room for rate-1/2 order-7 */
-    uint8_t decoded[CONV_EXAMPLE_MSG_LEN + 4];
+/* ---------- UHF Beacon ---------- */
 
-    for (size_t i = 0; i < CONV_EXAMPLE_MSG_LEN; i++) {
-        msg[i] = (uint8_t)(i * 19u + 3u);
+static int beacon_example(void) {
+    /* Exercise all five beacon modes with a small burst of byte errors
+     * well within the RS correction capability (up to 16 per block). */
+    static const sterg_beacon_mode_t modes[] = {
+        STERG_BEACON_MODE_NOMINAL,
+        STERG_BEACON_MODE_PRELINK,
+        STERG_BEACON_MODE_DETUMBLING,
+        STERG_BEACON_MODE_LOWPOWER,
+        STERG_BEACON_MODE_CRITICAL,
+    };
+
+    sterg_uhf_beacon_t *bcn = sterg_uhf_beacon_create();
+    if (!bcn) return 10;
+
+    for (size_t m = 0; m < sizeof(modes) / sizeof(modes[0]); m++) {
+        sterg_beacon_mode_t mode = modes[m];
+        size_t payload_len = sterg_beacon_payload_len(mode);
+
+        uint8_t payload[STERG_BEACON_MAX_PAYLOAD];
+        uint8_t encoded[STERG_BEACON_MAX_ENCODED];
+        uint8_t decoded[STERG_BEACON_MAX_PAYLOAD];
+
+        for (size_t i = 0; i < payload_len; i++) {
+            payload[i] = (uint8_t)((i * 53u + mode) ^ 0x5A);
+        }
+
+        size_t enc_len = sterg_uhf_beacon_encode(bcn, mode, payload, encoded);
+        if (enc_len != payload_len + STERG_BEACON_PARITY) {
+            sterg_uhf_beacon_destroy(bcn); return 20 + (int)mode;
+        }
+
+        /* Flip up to 8 bytes — well under the 16-byte capacity */
+        for (int k = 0; k < 8; k++) {
+            encoded[(k * 7) % enc_len] ^= 0xA5;
+        }
+
+        ssize_t dec_len = sterg_uhf_beacon_decode(bcn, mode, encoded, decoded);
+        if (dec_len != (ssize_t)payload_len) {
+            sterg_uhf_beacon_destroy(bcn); return 30 + (int)mode;
+        }
+        if (memcmp(payload, decoded, payload_len) != 0) {
+            sterg_uhf_beacon_destroy(bcn); return 40 + (int)mode;
+        }
     }
 
-    correct_convolutional *conv = correct_convolutional_create(
-        2, 7, correct_conv_r12_7_polynomial);
-    if (!conv) return 10;
-
-    size_t enc_bits = correct_convolutional_encode(conv, msg, CONV_EXAMPLE_MSG_LEN, encoded);
-    if (enc_bits == 0) {
-        correct_convolutional_destroy(conv);
-        return 11;
-    }
-
-    /* Flip a handful of bits - viterbi should recover them */
-    encoded[3] ^= 0x08;
-    encoded[10] ^= 0x01;
-    encoded[20] ^= 0x40;
-
-    ssize_t dec_bytes = correct_convolutional_decode(conv, encoded, enc_bits, decoded);
-    correct_convolutional_destroy(conv);
-
-    if (dec_bytes < (ssize_t)CONV_EXAMPLE_MSG_LEN) return 12;
-    if (memcmp(msg, decoded, CONV_EXAMPLE_MSG_LEN) != 0) return 13;
-
+    sterg_uhf_beacon_destroy(bcn);
     return 0;
 }
 
@@ -88,10 +103,10 @@ static int conv_example(void) {
 int fec_sterg_example_run(void) {
     int rc;
 
-    rc = rs_example();
+    rc = hk_example();
     if (rc) return rc;
 
-    rc = conv_example();
+    rc = beacon_example();
     if (rc) return rc;
 
     return 0;
