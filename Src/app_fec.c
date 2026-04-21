@@ -24,13 +24,21 @@
  *   total_length = 6 + (len_field + 1) = 7 + len_field
  * ================================================================ */
 #define CCSDS_HDR_LEN          6u
-#define CCSDS_MAX_PACKET_LEN   2048u
+/* Largest payload we actually expect from sterg_tlm_agg is ~223 B of
+ * data + secondary header + aggregator overhead — well under 512 B.
+ * Anything larger than this is almost certainly framing drift. */
+#define CCSDS_MAX_PACKET_LEN   512u
 
 /* MIDs emitted by sterg_tlm_agg (see apps/sterg_tlm_agg/fsw/inc/sterg_tlm_agg_msgids.h) */
 #define MID_TLM_AGG_PKT1       0x089Cu
 #define MID_TLM_AGG_PKT2       0x089Du
 #define MID_TLM_AGG_PKT3       0x089Eu
 #define MID_TLM_AGG_PKT4       0x089Fu
+
+static inline int mid_is_known(uint16_t mid) {
+    return mid == MID_TLM_AGG_PKT1 || mid == MID_TLM_AGG_PKT2 ||
+           mid == MID_TLM_AGG_PKT3 || mid == MID_TLM_AGG_PKT4;
+}
 
 /* ================================================================
  * State
@@ -41,6 +49,7 @@ static sterg_uhf_beacon_t *s_bcn;     /* exercised via synthetic frame below */
 static uint32_t s_frame_count;
 static uint32_t s_ok_count;
 static uint32_t s_fail_count;
+static uint32_t s_resync_bytes;    /* total bytes dropped looking for a header */
 
 /* Scratch buffers. Putting them in .bss (not on stack) keeps the ISR
  * stack small and makes their cost obvious to the linker. */
@@ -53,28 +62,41 @@ static uint8_t s_fec_dec[STERG_HK_MSG_LEN];
  * CCSDS reassembly
  * ================================================================ */
 static int try_read_packet(size_t *out_len) {
-    /* Need at least the header before we know how long the packet is. */
-    if (APP_UART_Available() < CCSDS_HDR_LEN) return 0;
+    /* Drop bytes one at a time until the next 6-byte window at the head
+     * of the ring looks like a plausible CCSDS header:
+     *   - bytes 0-1 match a known MID
+     *   - 7 + length_field (bytes 4-5) is in range [CCSDS_HDR_LEN+1,
+     *     CCSDS_MAX_PACKET_LEN]
+     * This is the standard resync strategy for a self-delimiting stream
+     * where we may have started mid-packet. */
+    for (;;) {
+        if (APP_UART_Available() < CCSDS_HDR_LEN) return 0;
 
-    uint8_t len_hi, len_lo;
-    APP_UART_Peek(4, &len_hi);
-    APP_UART_Peek(5, &len_lo);
-    uint16_t len_field = (uint16_t)((len_hi << 8) | len_lo);
-    uint32_t total = 7u + len_field;
+        uint8_t b0, b1, len_hi, len_lo;
+        APP_UART_Peek(0, &b0);
+        APP_UART_Peek(1, &b1);
+        APP_UART_Peek(4, &len_hi);
+        APP_UART_Peek(5, &len_lo);
 
-    if (total > CCSDS_MAX_PACKET_LEN) {
-        /* Bogus length — resync by dropping one byte and trying again */
+        uint16_t mid       = (uint16_t)((b0 << 8) | b1);
+        uint16_t len_field = (uint16_t)((len_hi << 8) | len_lo);
+        uint32_t total     = 7u + (uint32_t)len_field;
+
+        if (mid_is_known(mid) &&
+            total >= (CCSDS_HDR_LEN + 1u) &&
+            total <= CCSDS_MAX_PACKET_LEN) {
+            /* Plausible header. Wait for the rest of the packet. */
+            if (APP_UART_Available() < total) return 0;
+            size_t got = APP_UART_Read(s_packet, total);
+            if (got != total) return -1;
+            *out_len = total;
+            return 1;
+        }
+
+        /* Not a valid header — drop one byte and retry. */
         APP_UART_Consume(1);
-        return -1;
+        s_resync_bytes++;
     }
-
-    if (APP_UART_Available() < total) return 0;  /* wait for rest */
-
-    size_t got = APP_UART_Read(s_packet, total);
-    if (got != total) return -1;
-
-    *out_len = total;
-    return 1;
 }
 
 /* ================================================================
@@ -159,8 +181,11 @@ static void process_packet(const uint8_t *pkt, size_t len) {
         return;
     }
 
+    /* Unreachable under the MID-whitelist resync — mid is known to be one
+     * of 0x089C..0x089F before process_packet() is called. Left here as
+     * a safety net. */
     s_fail_count++;
-    printf("[%04lu] ??  mid=0x%04X len=%u  UNKNOWN\r\n",
+    printf("[%04lu] ??  mid=0x%04X len=%u  UNEXPECTED\r\n",
            (unsigned long)s_frame_count, mid, (unsigned)len);
 }
 
@@ -196,9 +221,10 @@ void APP_FEC_Loop(void) {
 
     /* Running totals every 32 frames */
     if ((s_frame_count & 0x1F) == 0) {
-        printf("        --- totals: %lu ok, %lu fail of %lu ---\r\n",
+        printf("        --- totals: %lu ok, %lu fail of %lu (resync bytes: %lu) ---\r\n",
                (unsigned long)s_ok_count,
                (unsigned long)s_fail_count,
-               (unsigned long)s_frame_count);
+               (unsigned long)s_frame_count,
+               (unsigned long)s_resync_bytes);
     }
 }
