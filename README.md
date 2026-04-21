@@ -136,6 +136,13 @@ Heap (allocated lazily on first decode, then reused):
 
 Flash: ~12-15 KB `.text` for both chains combined on Cortex-M4 at `-Os`.
 
+## On-board testing with NUCLEO-H755ZI-Q
+
+A ready-to-integrate app in `app/` wires the library to a NUCLEO-H755ZI-Q:
+receives raw CCSDS telemetry on USART2, dispatches HK vs. Beacon by MID,
+runs a round-trip FEC test, and logs results to the ST-LINK USB VCP.
+Step-by-step build/flash/wiring guide: [docs/BOARD_TESTING.md](docs/BOARD_TESTING.md).
+
 ## Docker verification
 
 See `docker/README.md`. Short version:
