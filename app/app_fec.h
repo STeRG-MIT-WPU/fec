@@ -14,11 +14,12 @@
  *                        Self-decode round-trip
  *                              │
  *                              ▼
- *                        USART3 (VCP) ──► host PC terminal
+ *                        printf ──► BSP_COM (USART3) ──► USB VCP ──► host PC
  *
- * Expected CubeMX config:
+ * Expected CubeMX / BSP config:
  *   * USART2  115200 8N1, global IT ON   — data in from MP257
- *   * USART3  115200 8N1                  — VCP / test log out
+ *   * USART3  under BSP_COM control      — VCP / test log out
+ *     (USE_COM_LOG = 1 in stm32h7xx_nucleo_conf.h)
  *   * Heap   _Min_Heap_Size >= 0x8000     — decoder needs ~25 KB
  *
  * Wiring (NUCLEO-H755ZI-Q):
@@ -38,10 +39,14 @@
 
 /* One-shot init.
  *   mp257_uart : HAL handle for the MP257 link (e.g. &huart2)
- *   vcp_uart   : HAL handle for the VCP      (e.g. &huart3)
+ *
+ * This function assumes printf is already routed to a TX-capable UART
+ * — either by the NUCLEO BSP (USE_COM_LOG=1 in stm32h7xx_nucleo_conf.h,
+ * then call BSP_COM_Init(COM1, ...) before APP_FEC_Init) or by a
+ * user-supplied __io_putchar() override.
+ *
  * Returns 0 on success, negative on allocation failure. */
-int APP_FEC_Init(UART_HandleTypeDef *mp257_uart,
-                 UART_HandleTypeDef *vcp_uart);
+int APP_FEC_Init(UART_HandleTypeDef *mp257_uart);
 
 /* Call repeatedly from main(). Drains any bytes from the ring buffer,
  * reassembles CCSDS packets, and runs FEC round-trip tests. Non-blocking. */

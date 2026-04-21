@@ -12,8 +12,6 @@
 #include "app_uart.h"
 #include "sterg_fec.h"
 
-extern void APP_Printf_Init(UART_HandleTypeDef *huart);
-
 /* ================================================================
  * CCSDS primary header layout (6 bytes, big-endian on the wire)
  *
@@ -169,9 +167,7 @@ static void process_packet(const uint8_t *pkt, size_t len) {
 /* ================================================================
  * Public API
  * ================================================================ */
-int APP_FEC_Init(UART_HandleTypeDef *mp257_uart, UART_HandleTypeDef *vcp_uart) {
-    APP_Printf_Init(vcp_uart);
-
+int APP_FEC_Init(UART_HandleTypeDef *mp257_uart) {
     s_hk  = sterg_uhf_hk_create();
     s_bcn = sterg_uhf_beacon_create();
     if (!s_hk || !s_bcn) {
