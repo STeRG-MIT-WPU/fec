@@ -1,4 +1,4 @@
-#include "correct/reed-solomon/polynomial.h"
+#include "rs_polynomial.h"
 
 polynomial_t polynomial_create(unsigned int order) {
     polynomial_t polynomial;

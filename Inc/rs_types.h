@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #include "correct.h"
-#include "correct/portable.h"
+#include "correct_portable.h"
 
 // an element in GF(2^8)
 typedef uint8_t field_element_t;

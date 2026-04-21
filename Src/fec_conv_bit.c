@@ -1,4 +1,4 @@
-#include "correct/convolutional/bit.h"
+#include "conv_bit.h"
 
 bit_writer_t *bit_writer_create(uint8_t *bytes, size_t len) {
     bit_writer_t *w = calloc(1, sizeof(bit_writer_t));

@@ -1,4 +1,6 @@
-#include "correct/reed-solomon/encode.h"
+#include "rs_types.h"
+#include "rs_field.h"
+#include "rs_polynomial.h"
 
 ssize_t correct_reed_solomon_encode(correct_reed_solomon *rs, const uint8_t *msg, size_t msg_length, uint8_t *encoded) {
     if (msg_length > rs->message_length) {

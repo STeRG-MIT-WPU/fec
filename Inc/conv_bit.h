@@ -1,6 +1,6 @@
 #ifndef CORRECT_CONVOLUTIONAL_BIT
 #define CORRECT_CONVOLUTIONAL_BIT
-#include "correct/convolutional.h"
+#include "conv_types.h"
 
 typedef struct {
     uint8_t current_byte;

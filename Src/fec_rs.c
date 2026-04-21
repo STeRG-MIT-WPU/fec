@@ -1,4 +1,6 @@
-#include "correct/reed-solomon/reed-solomon.h"
+#include "rs_types.h"
+#include "rs_field.h"
+#include "rs_polynomial.h"
 
 // coeff must be of size nroots + 1
 static polynomial_t reed_solomon_build_generator(field_t field, unsigned int nroots,

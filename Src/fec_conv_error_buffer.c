@@ -1,4 +1,4 @@
-#include "correct/convolutional/error_buffer.h"
+#include "conv_error_buffer.h"
 
 error_buffer_t *error_buffer_create(unsigned int num_states) {
     error_buffer_t *buf = calloc(1, sizeof(error_buffer_t));

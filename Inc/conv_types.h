@@ -8,7 +8,7 @@
 #include <limits.h>
 
 #include "correct.h"
-#include "correct/portable.h"
+#include "correct_portable.h"
 
 typedef unsigned int shift_register_t;
 typedef uint16_t polynomial_t;

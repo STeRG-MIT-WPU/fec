@@ -1,11 +1,11 @@
 #ifndef CORRECT_CONVOLUTIONAL_H
 #define CORRECT_CONVOLUTIONAL_H
-#include "correct/convolutional.h"
-#include "correct/convolutional/bit.h"
-#include "correct/convolutional/metric.h"
-#include "correct/convolutional/lookup.h"
-#include "correct/convolutional/history_buffer.h"
-#include "correct/convolutional/error_buffer.h"
+#include "conv_types.h"
+#include "conv_bit.h"
+#include "conv_metric.h"
+#include "conv_lookup.h"
+#include "conv_history_buffer.h"
+#include "conv_error_buffer.h"
 
 struct correct_convolutional {
     const unsigned int *table;  // size 2**order

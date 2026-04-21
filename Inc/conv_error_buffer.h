@@ -1,6 +1,6 @@
 #ifndef CORRECT_CONVOLUTIONAL_ERROR_BUFFER_H
 #define CORRECT_CONVOLUTIONAL_ERROR_BUFFER_H
-#include "correct/convolutional.h"
+#include "conv_types.h"
 
 typedef struct {
     unsigned int index;

@@ -1,6 +1,6 @@
 #ifndef CORRECT_REED_SOLOMON_FIELD
 #define CORRECT_REED_SOLOMON_FIELD
-#include "correct/reed-solomon.h"
+#include "rs_types.h"
 
 static inline field_element_t field_mul_log_element(field_t field, field_logarithm_t l, field_logarithm_t r) {
     field_operation_t res = (field_operation_t)l + (field_operation_t)r;

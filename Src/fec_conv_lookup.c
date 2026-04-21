@@ -1,4 +1,4 @@
-#include "correct/convolutional/lookup.h"
+#include "conv_lookup.h"
 
 // table has numstates rows
 // each row contains all of the polynomial output bits concatenated together

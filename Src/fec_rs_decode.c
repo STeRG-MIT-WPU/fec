@@ -1,4 +1,6 @@
-#include "correct/reed-solomon/encode.h"
+#include "rs_types.h"
+#include "rs_field.h"
+#include "rs_polynomial.h"
 
 // calculate all syndromes of the received polynomial at the roots of the generator
 // returns true if syndromes are all zero

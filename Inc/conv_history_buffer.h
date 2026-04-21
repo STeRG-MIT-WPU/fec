@@ -1,7 +1,7 @@
 #ifndef CORRECT_CONVOLUTIONAL_HISTORY_BUFFER_H
 #define CORRECT_CONVOLUTIONAL_HISTORY_BUFFER_H
-#include "correct/convolutional.h"
-#include "correct/convolutional/bit.h"
+#include "conv_types.h"
+#include "conv_bit.h"
 
 // ring buffer of path histories
 // generates output bits after accumulating sufficient history

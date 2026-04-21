@@ -1,6 +1,6 @@
 #ifndef CORRECT_CONVOLUTIONAL_LOOKUP
 #define CORRECT_CONVOLUTIONAL_LOOKUP
-#include "correct/convolutional.h"
+#include "conv_types.h"
 
 typedef unsigned int distance_pair_key_t;
 typedef uint32_t output_pair_t;

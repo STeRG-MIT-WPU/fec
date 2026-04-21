@@ -1,4 +1,4 @@
-#include "correct/convolutional/history_buffer.h"
+#include "conv_history_buffer.h"
 
 history_buffer *history_buffer_create(unsigned int min_traceback_length,
                                       unsigned int traceback_group_length,

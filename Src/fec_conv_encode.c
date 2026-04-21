@@ -1,4 +1,4 @@
-#include "correct/convolutional/convolutional.h"
+#include "conv_internal.h"
 
 size_t correct_convolutional_encode_len(correct_convolutional *conv, size_t msg_len) {
     size_t msgbits = 8 * msg_len;

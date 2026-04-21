@@ -7,11 +7,15 @@
 #                 Proves the port builds clean for STM32 targets.
 #   all         - run both
 #   clean       - remove build artifacts
+#
+# Flat layout — every .c under Src/ gets compiled; every .h under Inc/ is
+# discoverable via a single include path.
 
 ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 INC      := $(ROOT)/Inc
-SRC_DIRS := $(ROOT)/Src/convolutional $(ROOT)/Src/reed-solomon $(ROOT)/Src/sterg
-SRCS     := $(foreach d,$(SRC_DIRS),$(wildcard $(d)/*.c))
+# Exclude app_*.c — those need the STM32 HAL and are not built in the
+# Docker test harness (they're compiled inside the STM32CubeIDE project).
+SRCS     := $(filter-out $(ROOT)/Src/app_%.c,$(wildcard $(ROOT)/Src/*.c))
 BUILD    := build
 
 HOST_CC     := gcc
@@ -23,13 +27,8 @@ ARM_CFLAGS := -std=c11 -Wall -Wextra -Wno-unused-parameter -Os \
               -ffunction-sections -fdata-sections \
               -I$(INC)
 
-# Give each object a path-prefixed name so bit.c and the two encode.c/decode.c
-# do not collide.
-host_obj = $(BUILD)/host/$(subst /,__,$(patsubst $(ROOT)/Src/%,%,$(1:.c=.o)))
-arm_obj  = $(BUILD)/arm/$(subst /,__,$(patsubst $(ROOT)/Src/%,%,$(1:.c=.o)))
-
-HOST_OBJS := $(foreach s,$(SRCS),$(call host_obj,$(s)))
-ARM_OBJS  := $(foreach s,$(SRCS),$(call arm_obj,$(s)))
+HOST_OBJS := $(patsubst $(ROOT)/Src/%.c,$(BUILD)/host/%.o,$(SRCS))
+ARM_OBJS  := $(patsubst $(ROOT)/Src/%.c,$(BUILD)/arm/%.o,$(SRCS))
 
 .PHONY: all host-test arm-build clean
 all: host-test arm-build
@@ -47,16 +46,7 @@ $(BUILD)/host/test_main.o: $(ROOT)/test/test_main.c
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) -c $< -o $@
 
-# one pattern per source directory because the prefix differs
-$(BUILD)/host/convolutional__%.o: $(ROOT)/Src/convolutional/%.c
-	@mkdir -p $(dir $@)
-	$(HOST_CC) $(HOST_CFLAGS) -c $< -o $@
-
-$(BUILD)/host/reed-solomon__%.o: $(ROOT)/Src/reed-solomon/%.c
-	@mkdir -p $(dir $@)
-	$(HOST_CC) $(HOST_CFLAGS) -c $< -o $@
-
-$(BUILD)/host/sterg__%.o: $(ROOT)/Src/sterg/%.c
+$(BUILD)/host/%.o: $(ROOT)/Src/%.c
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) -c $< -o $@
 
@@ -65,15 +55,7 @@ arm-build: $(ARM_OBJS)
 	@echo "==> Cross-compile OK: $(words $(ARM_OBJS)) Cortex-M4 objects built"
 	@arm-none-eabi-size $(ARM_OBJS) | tail -n +1
 
-$(BUILD)/arm/convolutional__%.o: $(ROOT)/Src/convolutional/%.c
-	@mkdir -p $(dir $@)
-	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
-
-$(BUILD)/arm/reed-solomon__%.o: $(ROOT)/Src/reed-solomon/%.c
-	@mkdir -p $(dir $@)
-	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
-
-$(BUILD)/arm/sterg__%.o: $(ROOT)/Src/sterg/%.c
+$(BUILD)/arm/%.o: $(ROOT)/Src/%.c
 	@mkdir -p $(dir $@)
 	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
 

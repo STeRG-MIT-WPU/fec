@@ -1,4 +1,4 @@
-#include "correct/convolutional/convolutional.h"
+#include "conv_internal.h"
 
 // https://www.youtube.com/watch?v=b3_lVSrPB6w
 

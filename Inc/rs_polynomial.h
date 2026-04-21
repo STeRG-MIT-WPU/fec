@@ -1,7 +1,7 @@
 #ifndef CORRECT_REED_SOLOMON_POLYNOMIAL_H
 #define CORRECT_REED_SOLOMON_POLYNOMIAL_H
-#include "correct/reed-solomon.h"
-#include "correct/reed-solomon/field.h"
+#include "rs_types.h"
+#include "rs_field.h"
 
 polynomial_t polynomial_create(unsigned int order);
 void polynomial_destroy(polynomial_t polynomial);

@@ -1,6 +1,6 @@
 #ifndef CORRECT_CONVOLUTIONAL_METRIC_H
 #define CORRECT_CONVOLUTIONAL_METRIC_H
-#include "correct/convolutional.h"
+#include "conv_types.h"
 
 // measure the hamming distance of two bit strings
 // implemented as population count of x XOR y

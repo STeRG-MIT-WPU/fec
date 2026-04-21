@@ -1,4 +1,4 @@
-#include "correct/convolutional/convolutional.h"
+#include "conv_internal.h"
 
 void convolutional_decode_warmup(correct_convolutional *conv, unsigned int sets,
                                  const uint8_t *soft) {
