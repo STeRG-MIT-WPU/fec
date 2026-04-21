@@ -2,7 +2,8 @@
  * app_uart.h — simple interrupt-driven RX ring buffer for the MP257 link.
  *
  * Usage (CubeIDE, HAL):
- *   1. In CubeMX enable USART2 (PD5/PD6), 115200 8N1, global IT on.
+ *   1. In CubeMX enable the MP257 UART (USART2 on PD5/PD6 for NUCLEO-H755ZI-Q),
+ *      115200 8N1, global IT on.
  *   2. In main.c call APP_UART_Init(&huart2) after MX_USART2_UART_Init().
  *   3. In main.c, implement HAL_UART_RxCpltCallback:
  *          void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
@@ -16,11 +17,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifndef STM32_HAL_INCLUDED
-/* Caller is expected to have pulled in the HAL already via main.h. */
-#endif
-
-typedef struct UART_HandleTypeDef UART_HandleTypeDef;
+#include "main.h"        /* pulls in the right <family>_hal.h and
+                          * UART_HandleTypeDef for this project       */
 
 /* Start interrupt-driven reception on the given UART. */
 void APP_UART_Init(UART_HandleTypeDef *huart);

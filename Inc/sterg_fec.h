@@ -19,7 +19,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include "correct.h"
+#include "correct.h"     /* defines ssize_t if the toolchain has none */
 
 #ifdef __cplusplus
 extern "C" {

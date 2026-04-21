@@ -34,11 +34,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
-typedef struct UART_HandleTypeDef UART_HandleTypeDef;
+#include "main.h"        /* brings in HAL + UART_HandleTypeDef */
 
 /* One-shot init.
- *   mp257_uart : HAL handle for USART2 (data in from MP257)
- *   vcp_uart   : HAL handle for USART3 (ST-LINK VCP, log out)
+ *   mp257_uart : HAL handle for the MP257 link (e.g. &huart2)
+ *   vcp_uart   : HAL handle for the VCP      (e.g. &huart3)
  * Returns 0 on success, negative on allocation failure. */
 int APP_FEC_Init(UART_HandleTypeDef *mp257_uart,
                  UART_HandleTypeDef *vcp_uart);
