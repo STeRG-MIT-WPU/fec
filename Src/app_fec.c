@@ -119,8 +119,6 @@ static void process_packet(const uint8_t *pkt, size_t len) {
     s_frame_count++;
     uint16_t mid = (uint16_t)((pkt[0] << 8) | pkt[1]);
 
-    uint32_t t0 = HAL_GetTick();
-
     /* ---- HK chain ---- */
     if (mid == MID_TLM_AGG_PKT1 || mid == MID_TLM_AGG_PKT2 ||
         mid == MID_TLM_AGG_PKT3 || mid == MID_TLM_AGG_PKT4) {
@@ -134,7 +132,10 @@ static void process_packet(const uint8_t *pkt, size_t len) {
         memset(s_fec_in, 0, STERG_HK_MSG_LEN);
         memcpy(s_fec_in, pkt, pad_len);
 
+        uint32_t t_enc_start = HAL_GetTick();
         size_t enc_bits = sterg_uhf_hk_encode(s_hk, s_fec_in, s_fec_enc);
+        uint32_t t_enc_end = HAL_GetTick();
+
         if (enc_bits == 0) {
             s_fail_count++;
             printf("[%04lu] HK mid=0x%04X len=%u  ENCODE FAILED\r\n",
@@ -142,17 +143,25 @@ static void process_packet(const uint8_t *pkt, size_t len) {
             return;
         }
 
+        uint32_t t_dec_start = HAL_GetTick();
         int rc = sterg_uhf_hk_decode(s_hk, s_fec_enc, enc_bits, s_fec_dec);
-        uint32_t elapsed = HAL_GetTick() - t0;
+        uint32_t t_dec_end = HAL_GetTick();
+
+        uint32_t enc_ms   = t_enc_end - t_enc_start;
+        uint32_t dec_ms   = t_dec_end - t_dec_start;
+        uint32_t total_ms = t_dec_end - t_enc_start;
 
         int match = (rc == 0) && (memcmp(s_fec_in, s_fec_dec, STERG_HK_MSG_LEN) == 0);
         if (match) s_ok_count++; else s_fail_count++;
 
-        printf("[%04lu] HK  mid=0x%04X len=%3u  enc=%u B  rt=%s  %lu ms\r\n",
+        printf("[%04lu] HK  mid=0x%04X len=%3u  fec=%u B  rt=%s  "
+               "enc=%lu dec=%lu tot=%lu ms\r\n",
                (unsigned long)s_frame_count, mid, (unsigned)len,
                (unsigned)(enc_bits / 8),
                match ? "OK  " : "FAIL",
-               (unsigned long)elapsed);
+               (unsigned long)enc_ms,
+               (unsigned long)dec_ms,
+               (unsigned long)total_ms);
         return;
     }
 
@@ -165,19 +174,30 @@ static void process_packet(const uint8_t *pkt, size_t len) {
         static uint8_t enc[STERG_BEACON_MAX_ENCODED];
         static uint8_t dec[STERG_BEACON_MAX_PAYLOAD];
 
+        uint32_t t_enc_start = HAL_GetTick();
         size_t enc_len = sterg_uhf_beacon_encode(s_bcn, mode, payload, enc);
+        uint32_t t_enc_end = HAL_GetTick();
+
+        uint32_t t_dec_start = HAL_GetTick();
         ssize_t dec_len = sterg_uhf_beacon_decode(s_bcn, mode, enc, dec);
-        uint32_t elapsed = HAL_GetTick() - t0;
+        uint32_t t_dec_end = HAL_GetTick();
+
+        uint32_t enc_ms   = t_enc_end - t_enc_start;
+        uint32_t dec_ms   = t_dec_end - t_dec_start;
+        uint32_t total_ms = t_dec_end - t_enc_start;
 
         int match = (dec_len == (ssize_t)payload_len) &&
                     (memcmp(payload, dec, payload_len) == 0);
         if (match) s_ok_count++; else s_fail_count++;
 
-        printf("[%04lu] BCN mid=0x%04X mode=%d len=%u  enc=%u B  rt=%s  %lu ms\r\n",
+        printf("[%04lu] BCN mid=0x%04X mode=%d len=%u  fec=%u B  rt=%s  "
+               "enc=%lu dec=%lu tot=%lu ms\r\n",
                (unsigned long)s_frame_count, mid, (int)mode,
                (unsigned)payload_len, (unsigned)enc_len,
                match ? "OK  " : "FAIL",
-               (unsigned long)elapsed);
+               (unsigned long)enc_ms,
+               (unsigned long)dec_ms,
+               (unsigned long)total_ms);
         return;
     }
 
